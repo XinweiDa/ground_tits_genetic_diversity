@@ -1,0 +1,252 @@
+Wallace Session 2024-05-28
+================
+
+Please find below the R code history from your *Wallace* v2.1.2 session.
+
+You can reproduce your session results by running this R Markdown file
+in RStudio.
+
+Each code block is called a “chunk”, and you can run them either
+one-by-one or all at once by choosing an option in the “Run” menu at the
+top-right corner of the “Source” pane in RStudio.
+
+For more detailed information see <http://rmarkdown.rstudio.com>).
+
+### Package installation
+
+Wallace uses the following R packages that must be installed and loaded
+before starting.
+
+```{r}
+library(spocc)
+library(spThin)
+library(dismo)
+library(sf)
+library(ENMeval)
+library(wallace)
+```
+
+The *Wallace* session code .Rmd file is composed of a chain of module
+functions that are internal to *Wallace*. Each of these functions
+corresponds to a single module that the user ran during the session. To
+see the internal code for these module functions, click on the links in
+the .Rmd file. Users are encouraged to write custom code in the .Rmd
+directly to modify their analysis, and even modify the module function
+code to further customize. To see the source code for any module
+function, just type its name into the R console and press Return.
+
+```{r}
+# example:
+# just type the function name and press Return to see its source code
+# paste this code into a new script to edit it
+occs_queryDb
+```
+
+Your analyses are below.
+
+------------------------------------------------------------------------
+
+## Analysis for *Pseudopodoces humilis* (Ph)
+
+User CSV path with occurrence data. If the CSV file is not in the
+current workspace, change to the correct file path
+(e.g. “/Users/darwin/Documents/occs/”).
+
+```{r}
+# NOTE: provide the folder path of the .csv file
+occs_path <- ""
+occs_path <- file.path(occs_path, "occurrence_thin5.csv")
+# get a list of species occurrence data
+userOccs_Ph <- occs_userOccs(
+  txtPath = occs_path, 
+  txtName = "occurrence_thin5.csv", 
+  txtSep = ",", 
+  txtDec = ".")
+occs_Ph <- userOccs_Ph$Pseudopodoces_humilis$cleaned
+```
+
+### Obtain environmental data
+
+Using user-specified variables.
+
+```{r}
+## Specify the directory with the environmental variables
+dir_envs_Ph <- ""
+envs_path <- file.path(dir_envs_Ph, c('bio02_local.tif', 'bio03_local.tif', 'bio07_local.tif', 'bio08_local.tif', 'bio11_local.tif', 'bio15_local.tif', 'bio18_local.tif', 'bio19_local.tif', 'elev_2.5m_local.tif'))
+# Create environmental object 
+envs_Ph <- envs_userEnvs(
+  rasPath = envs_path,
+  rasName = c('bio02_local.tif', 'bio03_local.tif', 'bio07_local.tif', 'bio08_local.tif', 'bio11_local.tif', 'bio15_local.tif', 'bio18_local.tif', 'bio19_local.tif', 'elev_2.5m_local.tif'),
+  doBrick = FALSE)
+occs_xy_Ph <- occs_Ph[c('longitude', 'latitude')]
+occs_vals_Ph <- as.data.frame(raster::extract(envs_Ph, occs_xy_Ph, cellnumbers = TRUE))
+# Remove duplicated same cell values
+occs_Ph <- occs_Ph[!duplicated(occs_vals_Ph[, 1]), ]
+occs_vals_Ph <- occs_vals_Ph[!duplicated(occs_vals_Ph[, 1]), -1]
+# remove occurrence records with NA environmental values
+occs_Ph <- occs_Ph[!(rowSums(is.na(occs_vals_Ph)) >= 1), ]
+# also remove variable value rows with NA environmental values
+occs_vals_Ph <- na.omit(occs_vals_Ph)
+# add columns for env variable values for each occurrence record
+occs_Ph <- cbind(occs_Ph, occs_vals_Ph)
+```
+
+### Process environmental data
+
+Sampling of 10000 background points and corresponding environmental data
+using a user provided background extent with a 0 degree buffer.
+
+```{r}
+# Load the user provided shapefile or csv file with the desired extent.
+  ##User must input the path to shapefile or csv file and the file name 
+# Define path
+bgPath_Ph <- ""
+bgExt_Ph <- penvs_userBgExtent(
+  bgShp_path = paste0(bgPath_Ph, "niche_model_range", ".shp"),
+  bgShp_name = paste0("niche_model_range", c(".shp", ".shx", ".dbf")),
+  userBgBuf = 0,
+  occs = occs_Ph)
+# Mask environmental data to provided extent
+bgMask_Ph <- penvs_bgMask(
+  occs = occs_Ph,
+  envs = envs_Ph,
+  bgExt = bgExt_Ph)
+# Sample background points from the provided area
+bgSample_Ph <- penvs_bgSample(
+  occs = occs_Ph,
+  bgMask =  bgMask_Ph,
+  bgPtsNum = 10000)
+# Extract values of environmental layers for each background point
+bgEnvsVals_Ph <- as.data.frame(raster::extract(bgMask_Ph,  bgSample_Ph))
+##Add extracted values to background points table
+bgEnvsVals_Ph <- cbind(scientific_name = paste0("bg_", "Pseudopodoces humilis"), bgSample_Ph,
+                            occID = NA, year = NA, institution_code = NA, country = NA,
+                            state_province = NA, locality = NA, elevation = NA,
+                            record_type = NA, bgEnvsVals_Ph)
+```
+
+### Partition occurrence data
+
+Partition occurrences and background points for model training and
+validation using random k-fold, a non-spatial partition method.
+
+```{r}
+# R code to get partitioned data
+groups_Ph <- part_partitionOccs(
+  occs = occs_Ph ,
+  bg =  bgSample_Ph, 
+  method = "rand",
+  kfolds = 5) 
+```
+
+### Build and Evaluate Niche Model
+
+Generating a species distribution model using the maxent.jar algorithm
+as implemented in ENMeval V2.0 (with clamping = TRUE). For tuning using
+L, LQ, H feature classes and regularization multipliers in the 0.5, 3
+range increasing by 0.5. Not using any categorical predictor variables.
+
+```{r}
+# Run maxent model for the selected species
+model_Ph <- model_maxent(
+  occs = occs_Ph,
+  bg = bgEnvsVals_Ph,
+  user.grp = groups_Ph, 
+  bgMsk = bgMask_Ph,
+  rms = c(0.5, 3), 
+  rmsStep =  0.5,
+  fcs = c('L', 'LQ', 'H'),
+  clampSel = TRUE,
+  algMaxent = "maxent.jar",
+  parallel = TRUE,
+  numCores = 4)
+```
+
+### Visualize
+
+Generate a map of the Maxent generated model with no threshold
+
+```{r}
+# Select current model and obtain raster prediction
+m_Ph <- model_Ph@models[["fc.H_rm.0.5"]]
+predSel_Ph <- dismo::predict(
+  m_Ph, bgMask_Ph,
+  args = c(paste0("outputformat=", "cloglog"), 
+           paste0("doclamp=", tolower(as.character(TRUE)))), 
+  na.rm = TRUE)
+#Get values of prediction
+mapPredVals_Ph <- getRasterVals(predSel_Ph, "cloglog")
+#Define colors and legend  
+rasCols <- c("#2c7bb6", "#abd9e9", "#ffffbf", "#fdae61", "#d7191c")
+legendPal <- colorNumeric(rev(rasCols), mapPredVals_Ph, na.color = 'transparent')
+rasPal <- colorNumeric(rasCols, mapPredVals_Ph, na.color = 'transparent')
+#Generate map
+m <- leaflet() %>% addProviderTiles(providers$Esri.WorldTopoMap) 
+m  %>%
+  leaflet::addLegend("bottomright", pal = legendPal,
+            title = "Predicted Suitability<br>(Training)",
+            values = mapPredVals_Ph, layerId = "train",
+            labFormat = reverseLabel(2, reverse_order = TRUE)) %>% 
+  #add occurrence data
+  addCircleMarkers(data = occs_Ph, lat = ~latitude, lng = ~longitude,
+                   radius = 5, color = 'red', fill = TRUE, fillColor = "red",
+                   fillOpacity = 0.2, weight = 2, popup = ~pop) %>% 
+  ##Add model prediction
+  addRasterImage(predSel_Ph, colors = rasPal, opacity = 0.7,
+                 group = 'vis', layerId = 'mapPred', method = "ngb") %>%
+ ##add background polygons
+  addPolygons(data = bgExt_Ph,fill = FALSE,
+              weight = 4, color = "blue", group = 'proj')
+```
+
+### Transfer model
+
+Transferring the model to the same modelling area with no threshold
+rule. Environmental layers for transferring are user provided.
+
+```{r}
+## Specify the directory with the environmental variables
+dir_envsXf_Ph <- ""
+envsXf_path <- file.path(dir_envsXf_Ph, c('bio02_local.tif', 'bio03_local.tif', 'bio07_local.tif', 'bio08_local.tif', 'bio11_local.tif', 'bio15_local.tif', 'bio18_local.tif', 'bio19_local.tif', 'elev_2.5m_local.tif'))
+# Load user environmental variables
+xferUserEnvs_Ph  <- envs_userEnvs(
+  rasPath = envsXf_path,
+  rasName = c('bio02_local.tif', 'bio03_local.tif', 'bio07_local.tif', 'bio08_local.tif', 'bio11_local.tif', 'bio15_local.tif', 'bio18_local.tif', 'bio19_local.tif', 'elev_2.5m_local.tif')
+)
+# Transfer model 
+xfer_userEnvs_Ph <- xfer_userEnvs(
+  evalOut = model_Ph,
+  curModel= "fc.H_rm.0.5",
+  envs = xferUserEnvs_Ph ,
+  xfExt = bgExt_Ph,
+  alg = "maxent.jar",
+  outputType = "cloglog",
+  clamp = TRUE
+ )
+# store the cropped variables of transfer
+xferExt_Ph <- xfer_userEnvs_Ph$xferExt
+
+###Make map of transfer
+bb_Ph <-  bgExt_Ph@bbox
+bbZoom <- polyZoom(bb_Ph[1, 1], bb_Ph[2, 1], bb_Ph[1, 2], 
+                   bb_Ph[2, 2], fraction = 0.05)
+mapXferVals_Ph <- getRasterVals(xfer_userEnvs_Ph$xferUser, "cloglog")
+rasCols_Ph <- c("#2c7bb6", "#abd9e9", "#ffffbf", "#fdae61", "#d7191c")
+# if no threshold specified
+legendPal <- colorNumeric(rev(rasCols_Ph), mapXferVals_Ph, na.color = 'transparent')
+rasPal_Ph <- colorNumeric(rasCols_Ph, mapXferVals_Ph, na.color = 'transparent')
+m <- leaflet() %>% addProviderTiles(providers$Esri.WorldTopoMap) 
+m %>%
+  fitBounds(bbZoom[1], bbZoom[2], bbZoom[3], bbZoom[4]) %>%
+  leaflet::addLegend("bottomright", pal = legendPal,
+            title = "Predicted Suitability<br>(Transferred)",
+            values = mapXferVals_Ph, layerId = 'xfer',
+            labFormat = reverseLabel(2, reverse_order = TRUE)) %>%
+# map model prediction raster and polygon of transfer
+  clearMarkers() %>% clearShapes() %>% removeImage('xferRas') %>%
+  addRasterImage(xfer_userEnvs_Ph$xferUser, colors = rasPal_Ph, opacity = 0.7,
+                 layerId = 'xferRas', group = 'xfer', method = "ngb") %>%
+ ##add polygon of transfer (same modeling area)
+  addPolygons(data = bgExt_Ph, fill = FALSE,
+              weight = 4, color = "blue", group = 'xfer')
+```
