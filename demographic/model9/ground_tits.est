@@ -1,0 +1,21 @@
+// Priors and rules file
+// *********************
+[PARAMETERS]
+//#isInt? #name #dist.#min #max
+//all N are in number of haploid individuals
+1  NSRE1          unif         100000      500000     output
+1  NSRE2          unif         10000       50000       output
+1  NSRE3          unif         10000       50000       output
+1  NSPLT           unif        200000      1000000     output
+1  NSLE           unif         100000      500000      output
+1  NANC1          unif         200000      1000000     output
+1  NANC2          unif         200000      1000000     output
+1  TDIV1          unif         2000        7000        output bounded
+1  TDIV2          unif         TDIV1       20000       output paramInRange
+0  M43            logunif      1e-9        1e-1        output
+0  M34            logunif      1e-9        1e-1        output
+[COMPLEX PARAMETERS]
+0  RANC1 = NANC1/NSLE                output
+0  RANC2 = NANC1/NSRE3               output
+0  RANC3 = NANC1/NSRE2               output
+0  RANC4 = NANC2/NSRE1               output
